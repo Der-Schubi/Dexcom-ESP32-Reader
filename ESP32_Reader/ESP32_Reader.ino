@@ -93,6 +93,96 @@ static BLEClient* pClient = NULL;                                               
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+void initDisplay()
+{
+    SerialPrintln(DEBUG, "Initializing display...");
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        SerialPrintln(ERROR, "SSD1306 display allocation failed");
+    }
+
+    // Adafruit splash screen
+    //display.display();
+    //delay(2000);
+
+    display.clearDisplay();
+    display.cp437(true);         // Use full 256 char 'Code Page 437' font
+    display.setCursor(0, 0);
+    display.setTextColor(WHITE);
+
+    display.setTextSize(1);      // Normal 1:1 pixel scale
+    display.println("ESP32 Dexcom Receiver");
+    display.drawFastHLine(0, 10, 128, WHITE);
+    display.setCursor(0, 15);
+    display.println("hunting TxID:");
+    display.println();
+    display.setTextSize(2);
+    display.println(transmitterID);
+
+    display.display();
+}
+
+void outputDataOnDisplay()
+{
+    SerialPrintln(DEBUG, "Writing data to display...");
+    int BG_this = 0;
+    int BG_last = 0;
+    int x_scale = 3;
+    int y_scale = 5;
+
+    if(glucoseValues[0] != 0)  // = initialisation value
+    {
+        float mmol_now = glucoseValues[0] * 0.0555;
+        float mmol_last = glucoseValues[1] * 0.0555;
+        float mmol_diff = mmol_now - mmol_last;
+
+        byte arrow = 0;
+        String str_diff = "";
+
+        if(mmol_diff >= 0.4)
+            arrow = up_arrow;
+        else if (mmol_diff <= -0.4)
+            arrow = down_arrow;
+        else
+            arrow = right_arrow;
+
+        mmol_diff = round(mmol_diff * 10) / 10;  // Round to one decimal place
+
+        if(mmol_diff < 0)
+            str_diff = String(mmol_diff, 1);
+        else
+            str_diff = "+" + String(mmol_diff, 1);
+
+        display.clearDisplay();
+        display.setCursor(0, 0);
+
+        display.setTextSize(1);
+        display.println("ESP32 Dexcom Receiver");
+        display.drawFastHLine(0, 10, 128, WHITE);
+        display.setCursor(0, 15);
+        display.setTextSize(2);
+        display.write(arrow);
+        display.print(" " + String(mmol_now,1));
+        display.setTextSize(1);
+        display.println(" " + str_diff);
+
+        display.drawPixel(10, SCREEN_HEIGHT - 1, WHITE);
+        for(int i = 1 ; i < saveLastXValues; i++)
+        {
+            BG_this = (glucoseValues[saveLastXValues - i - 1] - 60) / 5;
+            BG_last = (glucoseValues[saveLastXValues - i] - 60) / 5;
+            if(i % 2 == 0)
+                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1, WHITE);
+
+            if(show_connected_dots)
+                display.drawLine(((i - 1) * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_last, (i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+            else
+                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+        }
+        display.drawPixel(118, SCREEN_HEIGHT - 1, WHITE);
+    }
+    display.display();
+}
+
 /**
  * Callback for the connection.
  */
@@ -161,8 +251,6 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
 {
     void onResult(BLEAdvertisedDevice advertisedDevice)                                                                 // Called for each advertising BLE server.
     {
-        //SerialPrint(DEBUG, "BLE Advertised Device found: ");
-        //SerialPrintln(DEBUG, advertisedDevice.toString().c_str());
         // We have found a device, let us now see if it contains the service we are looking for.
         String dexName = "Dexcom" + String(transmitterID[4]) + String(transmitterID[5]);
 
@@ -326,32 +414,7 @@ void setup()
     }
 
     if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
-    {
-        Serial.println("Initializing display...");
-        if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-            Serial.println(F("SSD1306 display allocation failed"));
-        }
-
-        // Adafruit splash screen
-        //display.display();
-        //delay(2000);
-
-        display.clearDisplay();
-        display.setTextColor(WHITE);
-        display.setCursor(0, 0);
-        display.cp437(true);         // Use full 256 char 'Code Page 437' font
-
-        display.setTextSize(1);      // Normal 1:1 pixel scale
-        display.println("ESP32 Dexcom Receiver");
-        display.println("---------------------");
-        display.println();
-        display.println("hunting TxID:");
-        display.println();
-        display.setTextSize(2);
-        display.println(transmitterID);
-
-        display.display();
-    }
+        initDisplay();
 
     BLEDevice::init("");
 
@@ -426,72 +489,10 @@ bool run()
             SerialPrintln(ERROR, "Can't read backfill data!");
     }
 
-    int BG_this = 0;
-    int BG_last = 0;
-    int x_scale = 3;
-    int y_scale = 5;
-
-    if(glucoseValues[0] != 0)  // = initialisation value
-    {
-        float mmol_now = glucoseValues[0] * 0.0555;
-        float mmol_last = glucoseValues[1] * 0.0555;
-        float mmol_diff = mmol_now - mmol_last;
-
-        byte arrow = 0;
-        String str_diff = "";
-
-        if(mmol_diff >= 0.4)
-            arrow = up_arrow;
-        else if (mmol_diff <= -0.4)
-            arrow = down_arrow;
-        else
-            arrow = right_arrow;
-
-        mmol_diff = round(mmol_diff * 10) / 10;  // Round to one decimal place
-
-        if(mmol_diff < 0)
-            str_diff = String(mmol_diff, 1);
-        else
-            str_diff = "+" + String(mmol_diff, 1);
-
-        display.clearDisplay();
-
-        display.setTextColor(WHITE);
-        display.setCursor(0, 0);
-        display.cp437(true);         // Use full 256 char 'Code Page 437' font
-        display.setTextSize(1);
-        display.println("ESP32 Dexcom Receiver");
-        display.println("---------------------");
-
-        display.setTextSize(2);
-        display.write(arrow);
-        display.print(" " + String(mmol_now,1));
-        display.setTextSize(1);
-        display.println(" " + str_diff);
-
-        //display.display();
-
-        //display.setTextSize(1);
-        //display.setCursor(0, 16);
-
-        display.drawPixel(10, SCREEN_HEIGHT - 1, WHITE);
-        for(int i = 1 ; i < saveLastXValues; i++)
-        {
-            BG_this = (glucoseValues[saveLastXValues - i - 1] - 60) / 5;
-            BG_last = (glucoseValues[saveLastXValues - i] - 60) / 5;
-            if(i % 2 == 0)
-                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1, WHITE);
-
-            if(show_connected_dots)
-                display.drawLine(((i - 1) * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_last, (i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
-            else
-                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
-        }
-        display.drawPixel(118, SCREEN_HEIGHT - 1, WHITE);
-    }
-    display.display();
-
     error_current_connection = false;                                                                                   // When we reached this point no error occured.
+
+    outputDataOnDisplay();
+
     //Let the Transmitter close the connection.
     sendDisconnect();
 }

@@ -391,7 +391,7 @@ void parseBackfill(std::string data)
     uint8_t type     = (uint8_t)data[6];
     uint8_t trend    = (uint8_t)data[7];
 
-    if(saveLastXValues > 1)                                                                                             // Array is big enouth for min 1 backfill value (and the current value).
+    if(saveLastXValues > 1)                                                                                             // Array is big enough for min 1 backfill value (and the current value).
     {
         for(int i = saveLastXValues - 1; i > 1; i--)                                                                    // Shift all old values (but not the first) back to save these.
             glucoseValues[i] = glucoseValues[i-1];
