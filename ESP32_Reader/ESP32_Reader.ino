@@ -126,8 +126,13 @@ void outputDataOnDisplay()
     SerialPrintln(DEBUG, "Writing data to display...");
     int BG_this = 0;
     int BG_last = 0;
+    int BG_cutoff = 60;
     int x_scale = 3;
     int y_scale = 5;
+    int x_offset = 10;
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
 
     if(glucoseValues[0] != 0)  // = initialisation value
     {
@@ -152,9 +157,6 @@ void outputDataOnDisplay()
         else
             str_diff = "+" + String(mmol_diff, 1);
 
-        display.clearDisplay();
-        display.setCursor(0, 0);
-
         display.setTextSize(1);
         display.println("ESP32 Dexcom Receiver");
         display.drawFastHLine(0, 10, 128, WHITE);
@@ -165,20 +167,30 @@ void outputDataOnDisplay()
         display.setTextSize(1);
         display.println(" " + str_diff);
 
-        display.drawPixel(10, SCREEN_HEIGHT - 1, WHITE);
+        //Range markings 70..180 / 3.9..10.0
+        int y70 = SCREEN_HEIGHT - 1 - ((70 - BG_cutoff) / y_scale);
+        int y180 = SCREEN_HEIGHT - 1 - ((180 - BG_cutoff) / y_scale);
+
+        display.drawPixel(x_offset, y70, WHITE);
+        display.drawPixel(x_offset, y180, WHITE);
         for(int i = 1 ; i < saveLastXValues; i++)
         {
-            BG_this = (glucoseValues[saveLastXValues - i - 1] - 60) / 5;
-            BG_last = (glucoseValues[saveLastXValues - i] - 60) / 5;
-            if(i % 2 == 0)
-                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1, WHITE);
+            BG_this = (glucoseValues[saveLastXValues - i - 1] - BG_cutoff) / y_scale;
+            BG_last = (glucoseValues[saveLastXValues - i] - BG_cutoff) / y_scale;
+
+            if(i % 4 == 0)
+            {
+                display.drawPixel((i * x_scale) + x_offset, y70, WHITE);
+                display.drawPixel((i * x_scale) + x_offset, y180, WHITE);
+            }
 
             if(show_connected_dots)
-                display.drawLine(((i - 1) * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_last, (i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+                display.drawLine(((i - 1) * x_scale) + x_offset, SCREEN_HEIGHT - 1 - BG_last, (i * x_scale) + x_offset, SCREEN_HEIGHT - 1 - BG_this, WHITE);
             else
-                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+                display.drawPixel((i * x_scale) + x_offset, SCREEN_HEIGHT - 1 - BG_this, WHITE);
         }
-        display.drawPixel(118, SCREEN_HEIGHT - 1, WHITE);
+        display.drawPixel(SCREEN_WIDTH - x_offset, y70, WHITE);
+        display.drawPixel(SCREEN_WIDTH - x_offset, y180, WHITE);
     }
     display.display();
 }
