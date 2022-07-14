@@ -20,9 +20,19 @@
 #include "BLEScan.h"
 #include "Output.h"
 
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
 #define STATE_START_SCAN 0                                                                                              // Set this state to start the scan.
 #define STATE_SCANNING   1                                                                                              // Indicates the esp is currently scanning for devices.
 #define STATE_SLEEP      2                                                                                              // Finished with reading data from the transmitter.
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+
 static int Status      = 0;                                                                                             // Set to 0 to automatically start scanning when esp has started.
 
 // The remote service we wish to connect to.
@@ -41,11 +51,15 @@ static BLEUUID manufacturerUUID("2A29"); // READ
 static BLEUUID        modelUUID("2A24"); // READ
 static BLEUUID     firmwareUUID("2A26"); // READ
 
+static byte up_arrow = 24;
+static byte down_arrow = 25;
+static byte right_arrow = 26;
 
-static std::string transmitterID = "xxxxxx";              /* Set here your transmitter ID */                            // This transmitter ID is used to identify our transmitter if multiple dexcom transmitters are found.
+static char transmitterID[] = "XXXXXX";           /* Set here your transmitter ID */                                    // This transmitter ID is used to identify our transmitter if multiple dexcom transmitters are found.
 static boolean useAlternativeChannel = true;      /* Enable when used concurrently with xDrip / Dexcom CGM */           // Tells the transmitter to use the alternative bt channel.
 static boolean bonding = false;                                                                                         // Gets set by Auth handshake "StatusRXMessage" and shows if the transmitter would like to bond with the client.
-static boolean force_rebonding = false;               /* Enable when problems with connecting */                        // When true: disables bonding before auth handshake. Enables bonding after successful authenticated (and before bonding command) so transmitter then can initiate bonding.
+static boolean force_rebonding = true;            /* Enable when problems with connecting */                            // When true: disables bonding before auth handshake. Enables bonding after successful authenticated (and before bonding command) so transmitter then can initiate bonding.
+static boolean show_connected_dots = true;        /* Set to false to draw dots instead of a line */
 /* Optimization or connecting problems: 
  * - pBLEScan->setInterval(100);             10-500 and > setWindow(..)
  * - pBLEScan->setWindow(99);                10-500 and < setInterval(..)
@@ -54,8 +68,8 @@ static boolean force_rebonding = false;               /* Enable when problems wi
 
 
 // Variables which survives the deep sleep. Uses RTC_SLOW memory.
-#define saveLastXValues 12                                                                                              // This saves the last x glucose levels by requesting them through the backfill request.
-RTC_SLOW_ATTR static uint16_t glucoseValues[saveLastXValues] = {0};                                                     // Reserve space for 1 hour a 5 min resolution of glucose values.
+#define saveLastXValues 36                                                                                              // This saves the last x glucose levels by requesting them through the backfill request.
+RTC_SLOW_ATTR static uint16_t glucoseValues[saveLastXValues] = {0};                                                     // Reserve space for 3 hours a 5 min resolution of glucose values.
 RTC_SLOW_ATTR static boolean error_last_connection = false;
 static boolean error_current_connection = false;                                                                        // To detect an error in the current session.
 
@@ -76,6 +90,8 @@ static BLERemoteCharacteristic* pRemoteModel;                                   
 static BLERemoteCharacteristic* pRemoteFirmware;                                                                        // Uses deviceInformationServiceUUID
 static BLEAdvertisedDevice* myDevice = NULL;                                                                            // The remote device (transmitter) found by the scan and set by scan callback function.
 static BLEClient* pClient = NULL;                                                                                       // Is global so we can disconnect everywhere when an error occured.
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 /**
  * Callback for the connection.
@@ -145,17 +161,22 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
 {
     void onResult(BLEAdvertisedDevice advertisedDevice)                                                                 // Called for each advertising BLE server.
     {
-        SerialPrint(DEBUG, "BLE Advertised Device found: ");
-        SerialPrintln(DEBUG, advertisedDevice.toString().c_str());
-
+        //SerialPrint(DEBUG, "BLE Advertised Device found: ");
+        //SerialPrintln(DEBUG, advertisedDevice.toString().c_str());
         // We have found a device, let us now see if it contains the service we are looking for.
+        String dexName = "Dexcom" + String(transmitterID[4]) + String(transmitterID[5]);
+
         if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(advServiceUUID) &&              // If the advertised service is the dexcom advertise service (not the main service that contains the characteristics).
-            advertisedDevice.haveName() && advertisedDevice.getName() == ("Dexcom" + transmitterID.substr(4,2)))
+            //advertisedDevice.haveName() && advertisedDevice.getName() == ("Dexcom" + transmitterID.substr(4,2)))
+            advertisedDevice.haveName() && advertisedDevice.getName() == (dexName.c_str()))
         {
+            SerialPrint(DEBUG, "BLE Advertised Device found: ");
+            SerialPrintln(DEBUG, advertisedDevice.toString().c_str());
+
             BLEDevice::getScan()->stop();                                                                               // We found our transmitter so stop scanning for now.
             myDevice = new BLEAdvertisedDevice(advertisedDevice);                                                       // Save device as new copy, myDevice also triggers a state change in main loop.
         }
-    } 
+    }
 };
 
 /**
@@ -265,10 +286,27 @@ bool readDeviceInformations()
 }
 
 /**
- * Method to check the reason the ESP woke up or was started.
+ * Returns true if invalid data was found / missing values or not x values are available.
  */
-void wakeUpRoutine() 
+bool needBackfill()
 {
+    bool doBackfill = error_last_connection;                                                                            // Also request backfill if last time was an error (maybe error while backfilling so missed some data).
+    for(int i = 0; i < saveLastXValues && !doBackfill; i++)
+    {
+        if(glucoseValues[i] < 10 || glucoseValues[i] > 600)                                                             // This includes 0 values from initialisation.
+            doBackfill = true;
+    }
+    return doBackfill;
+}
+
+/**
+ * Set up the ESP32 ble.
+ */
+void setup()
+{
+    Serial.begin(115200);
+    SerialPrintln(DEBUG, "Starting ESP32 dexcom client application...");
+
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     switch(wakeup_reason)
     {
@@ -286,30 +324,35 @@ void wakeUpRoutine()
             SerialPrintln(DEBUG, "Wakeup was not caused by deep sleep (normal start).");                                // Problem with allways this case? See https://forum.mongoose-os.com/discussion/1628/tg0wdt-sys-reset-immediately-after-waking-from-deep-sleep
             break;
     }
-}
 
-/**
- * Returns true if invalid data was found / missing values or not x values are available.
- */
-bool needBackfill()
-{
-    bool doBackfill = error_last_connection;                                                                            // Also request backfill if last time was an error (maybe error while backfilling so missed some data).
-    for(int i = 0; i < saveLastXValues && !doBackfill; i++)
+    if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
     {
-        if(glucoseValues[i] < 10 || glucoseValues[i] > 600)                                                             // This includes 0 values from initialisation.
-            doBackfill = true;
-    }
-    return doBackfill;
-}
+        Serial.println("Initializing display...");
+        if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+            Serial.println(F("SSD1306 display allocation failed"));
+        }
 
-/**
- * Set up the ESP32 ble.
- */
-void setup() 
-{
-    Serial.begin(115200);
-    wakeUpRoutine();
-    SerialPrintln(DEBUG, "Starting ESP32 dexcom client application...");
+        // Adafruit splash screen
+        //display.display();
+        //delay(2000);
+
+        display.clearDisplay();
+        display.setTextColor(WHITE);
+        display.setCursor(0, 0);
+        display.cp437(true);         // Use full 256 char 'Code Page 437' font
+
+        display.setTextSize(1);      // Normal 1:1 pixel scale
+        display.println("ESP32 Dexcom Receiver");
+        display.println("---------------------");
+        display.println();
+        display.println("hunting TxID:");
+        display.println();
+        display.setTextSize(2);
+        display.println(transmitterID);
+
+        display.display();
+    }
+
     BLEDevice::init("");
 
     BLEScan* pBLEScan = BLEDevice::getScan();                                                                           // Retrieve a Scanner.
@@ -328,6 +371,7 @@ void ExitState(std::string message)
     SerialPrintln(ERROR, message.c_str());
     pClient->disconnect();                                                                                              // Disconnect to trigger onDisconnect event and go to sleep.
 }
+
 /**
  * This method will perform a full transmitter connect and read data.
  */
@@ -381,6 +425,71 @@ bool run()
         if(!readBackfill())
             SerialPrintln(ERROR, "Can't read backfill data!");
     }
+
+    int BG_this = 0;
+    int BG_last = 0;
+    int x_scale = 3;
+    int y_scale = 5;
+
+    if(glucoseValues[0] != 0)  // = initialisation value
+    {
+        float mmol_now = glucoseValues[0] * 0.0555;
+        float mmol_last = glucoseValues[1] * 0.0555;
+        float mmol_diff = mmol_now - mmol_last;
+
+        byte arrow = 0;
+        String str_diff = "";
+
+        if(mmol_diff >= 0.4)
+            arrow = up_arrow;
+        else if (mmol_diff <= -0.4)
+            arrow = down_arrow;
+        else
+            arrow = right_arrow;
+
+        mmol_diff = round(mmol_diff * 10) / 10;  // Round to one decimal place
+
+        if(mmol_diff < 0)
+            str_diff = String(mmol_diff, 1);
+        else
+            str_diff = "+" + String(mmol_diff, 1);
+
+        display.clearDisplay();
+
+        display.setTextColor(WHITE);
+        display.setCursor(0, 0);
+        display.cp437(true);         // Use full 256 char 'Code Page 437' font
+        display.setTextSize(1);
+        display.println("ESP32 Dexcom Receiver");
+        display.println("---------------------");
+
+        display.setTextSize(2);
+        display.write(arrow);
+        display.print(" " + String(mmol_now,1));
+        display.setTextSize(1);
+        display.println(" " + str_diff);
+
+        //display.display();
+
+        //display.setTextSize(1);
+        //display.setCursor(0, 16);
+
+        display.drawPixel(10, SCREEN_HEIGHT - 1, WHITE);
+        for(int i = 1 ; i < saveLastXValues; i++)
+        {
+            BG_this = (glucoseValues[saveLastXValues - i - 1] - 60) / 5;
+            BG_last = (glucoseValues[saveLastXValues - i] - 60) / 5;
+            if(i % 2 == 0)
+                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1, WHITE);
+
+            if(show_connected_dots)
+                display.drawLine(((i - 1) * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_last, (i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+            else
+                display.drawPixel((i * x_scale) + 10, SCREEN_HEIGHT - 1 - BG_this, WHITE);
+        }
+        display.drawPixel(118, SCREEN_HEIGHT - 1, WHITE);
+    }
+    display.display();
 
     error_current_connection = false;                                                                                   // When we reached this point no error occured.
     //Let the Transmitter close the connection.
