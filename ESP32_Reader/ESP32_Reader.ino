@@ -450,8 +450,8 @@ bool run()
     else
         SerialPrintln(DEBUG, "We are now connected to the transmitter.");
     
-    if(!readDeviceInformations())                                                                                       // Read the general device informations like model no. and manufacturer.
-        SerialPrintln(DEBUG, "Error while reading device informations!");                                               // If empty strings are read from the device information Characteristic, try reading device information after successfully authenticated. 
+    //if(!readDeviceInformations())                                                                                     // Read the general device informations like model no. and manufacturer.
+        //SerialPrintln(DEBUG, "Error while reading device informations!");                                             // If empty strings are read from the device information Characteristic, try reading device information after successfully authenticated.
 
     if(!authenticate())                                                                                                 // Authenticate with the transmitter.
         ExitState("Error while trying to authenticate!");

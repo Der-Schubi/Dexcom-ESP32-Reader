@@ -28,7 +28,7 @@ typedef enum
 } OutputLevel;
 
 
-static OutputLevel outputLevel = FULL;                    /* Change to your output level  */                            // Set this to NONE if no serial connection is used.
+static OutputLevel outputLevel = NONE;                    /* Change to your output level  */                            // Set this to NONE if no serial connection is used.
 
 /** 
  * Wrapper functions for Serial.print(..) to allow filtering and setting an output log level.
@@ -55,23 +55,17 @@ template<typename... Args> void SerialPrintf(int type, const char * f, Args... a
 {
     if(type >= outputLevel)
         Serial.printf(f, args...);
-    else
-        delay(10);                                                                                                      // Use a delay as compensation for serial.print()
 }
 
 void SerialPrintln(OutputType type)
 {
     if(type >= outputLevel)
         Serial.println();
-    else
-        delay(10);
 }
 void SerialPrintln(OutputType type, const char * text)
 {
     if(type >= outputLevel)
         Serial.println(text);
-    else
-        delay(10);
 }
 #pragma GCC diagnostic pop
 
