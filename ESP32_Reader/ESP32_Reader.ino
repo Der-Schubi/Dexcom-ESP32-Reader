@@ -33,6 +33,8 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 
+#define ADC_PIN       34
+
 static int Status      = 0;                                                                                             // Set to 0 to automatically start scanning when esp has started.
 
 // The remote service we wish to connect to.
@@ -93,9 +95,17 @@ static BLEClient* pClient = NULL;                                               
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+float getBatteryVoltage()
+{
+    float mult = 1.7; // Should be 1.6113 *shrug*
+    analogSetPinAttenuation(ADC_PIN, ADC_11db);
+    return round((analogRead(ADC_PIN) * mult) / 100) / 10;
+}
+
 void initDisplay()
 {
     SerialPrintln(DEBUG, "Initializing display...");
+    Wire.begin(0, 4); // SDA, SCL
     if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
         SerialPrintln(ERROR, "SSD1306 display allocation failed");
     }
@@ -117,6 +127,10 @@ void initDisplay()
     display.println();
     display.setTextSize(2);
     display.println(transmitterID);
+
+    display.setTextSize(1);
+    display.println();
+    display.println("Battery: " + String(getBatteryVoltage(), 1) + "V");
 
     display.display();
 }
@@ -165,7 +179,8 @@ void outputDataOnDisplay()
         display.write(arrow);
         display.print(" " + String(mmol_now,1));
         display.setTextSize(1);
-        display.println(" " + str_diff);
+        display.print(" " + str_diff);
+        display.println(" " + String(getBatteryVoltage(), 1) + "V");
 
         //Range markings 70..180 / 3.9..10.0
         int y70 = SCREEN_HEIGHT - 1 - ((70 - BG_cutoff) / y_scale);
